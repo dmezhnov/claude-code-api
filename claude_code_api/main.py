@@ -22,27 +22,9 @@ from claude_code_api.core.auth import auth_middleware
 from claude_code_api.core.claude_manager import ClaudeManager
 from claude_code_api.core.config import settings
 from claude_code_api.core.database import close_database, create_tables
+from claude_code_api.core.logging_config import configure_logging
 from claude_code_api.core.session_manager import SessionManager
 from claude_code_api.models.openai import ChatCompletionChunk
-
-# Configure structured logging
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer(),
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
-)
 
 logger = structlog.get_logger()
 
@@ -50,21 +32,23 @@ logger = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
-    logger.info("Starting Claude Code API Gateway", version="1.0.0")
+    # Configure logging during startup so import-time failures don't abort module load.
+    configure_logging(settings)
+    logger.info("Starting Claude Code API Gateway", version="1.0.0", lifecycle=True)
 
     # Initialize database
     await create_tables()
-    logger.info("Database initialized")
+    logger.info("Database initialized", lifecycle=True)
 
     # Initialize managers
     app.state.session_manager = SessionManager()
     app.state.claude_manager = ClaudeManager()
-    logger.info("Managers initialized")
+    logger.info("Managers initialized", lifecycle=True)
 
     # Verify Claude Code availability
     try:
         claude_version = await app.state.claude_manager.get_version()
-        logger.info("Claude Code available", version=claude_version)
+        logger.info("Claude Code available", version=claude_version, lifecycle=True)
     except Exception as e:
         logger.error("Claude Code not available", error=str(e))
         raise HTTPException(
@@ -75,10 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # Cleanup
-    logger.info("Shutting down Claude Code API Gateway")
+    logger.info("Shutting down Claude Code API Gateway", lifecycle=True)
     await app.state.session_manager.cleanup_all()
     await close_database()
-    logger.info("Shutdown complete")
+    logger.info("Shutdown complete", lifecycle=True)
 
 
 app = FastAPI(
@@ -148,7 +132,11 @@ async def http_exception_handler(request, exc):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     """Return OpenAI-style errors for validation failures."""
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = getattr(
+        status,
+        "HTTP_422_UNPROCESSABLE_CONTENT",
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+    )
     for error in exc.errors():
         if error.get("type") in {"value_error.jsondecode", "json_invalid"}:
             status_code = status.HTTP_400_BAD_REQUEST
@@ -237,8 +225,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "claude_code_api.main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=settings.host,
+        port=settings.port,
         reload=True,
-        log_level="info",
+        log_level=settings.log_level.lower(),
     )
