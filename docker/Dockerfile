@@ -1,22 +1,18 @@
-FROM ubuntu:24.04
+FROM python:3.11-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
     git \
     jq \
-    python3 \
-    python3-pip \
-    python3-venv \
-    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -m -s /bin/bash claudeuser && \
-    echo "claudeuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+RUN useradd -m -s /bin/bash claudeuser
 
 # Set up application directory
 WORKDIR /home/claudeuser/app
@@ -25,16 +21,15 @@ RUN chown -R claudeuser:claudeuser /home/claudeuser/app
 
 USER claudeuser
 
-# Install Claude CLI using the official installer (no npm required)
+# Install Claude CLI using the official installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Create virtualenv and install dependencies
 RUN python3 -m venv /home/claudeuser/venv && \
     /home/claudeuser/venv/bin/pip install --upgrade pip setuptools wheel && \
-    /home/claudeuser/venv/bin/pip install -e . --use-pep517 || \
     /home/claudeuser/venv/bin/pip install -e .
 
-ENV PATH="/home/claudeuser/venv/bin:/home/claudeuser/.local/bin:/home/claudeuser/.bun/bin:${PATH}"
+ENV PATH="/home/claudeuser/venv/bin:/home/claudeuser/.local/bin:${PATH}"
 
 # Create Claude config and workspace directories
 RUN mkdir -p /home/claudeuser/.config/claude /home/claudeuser/app/workspace

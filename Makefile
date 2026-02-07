@@ -70,7 +70,7 @@ kill:
 		echo "Error: PORT parameter is required. Usage: make kill PORT=8001"; \
 	else \
 		echo "Looking for processes on port $(PORT)..."; \
-		if [ "$$(uname)" = "Darwin" ] || [ "$$(uname)" = "Linux" ]; then \
+		if command -v lsof >/dev/null 2>&1; then \
 			PID=$$(lsof -iTCP:$(PORT) -sTCP:LISTEN -t); \
 			if [ -n "$$PID" ]; then \
 				echo "Found process(es) with PID(s): $$PID"; \
@@ -79,7 +79,12 @@ kill:
 				echo "No process found listening on port $(PORT)."; \
 			fi; \
 		else \
-			echo "This command is only supported on Unix-like systems (Linux/macOS)."; \
+			echo "lsof not found. Trying fuser..."; \
+			if command -v fuser >/dev/null 2>&1; then \
+				fuser -k $(PORT)/tcp && echo "Process(es) killed successfully."; \
+			else \
+				echo "Neither lsof nor fuser found. Please kill the process manually."; \
+			fi; \
 		fi; \
 	fi
 
@@ -163,15 +168,6 @@ help:
 	@echo "  make start       - Start Python API server (development with reload)"
 	@echo "  make start-prod  - Start Python API server (production)"
 	@echo ""
-	@echo "TypeScript API:"
-	@echo "  make install-js     - Install TypeScript dependencies"
-	@echo "  make test-js        - Run TypeScript unit tests"
-	@echo "  make test-js-real   - Run Python test suite against TypeScript API"
-	@echo "  make start-js       - Start TypeScript API server (production)"
-	@echo "  make start-js-dev   - Start TypeScript API server (development with reload)"
-	@echo "  make start-js-prod  - Build and start TypeScript API server (production)"
-	@echo "  make build-js       - Build TypeScript project"
-	@echo ""
 	@echo "Quality & Security:"
 	@echo "  make sonar         - Run SonarQube analysis (generates coverage + scans)"
 	@echo "  make sonar-cloud   - Run SonarCloud scanner (uses SONAR_CLOUD_TOKEN)"
@@ -186,6 +182,3 @@ help:
 	@echo "General:"
 	@echo "  make clean       - Clean up Python cache files"
 	@echo "  make kill PORT=X - Kill process on specific port"
-	@echo ""
-	@echo "IMPORTANT: Both implementations are functionally equivalent!"
-	@echo "Use Python or TypeScript - both provide the same OpenAI-compatible API."

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+from pathlib import Path
 from typing import List
 
 from pydantic import Field, field_validator
@@ -11,62 +12,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def find_claude_binary() -> str:
     """Find Claude binary path automatically."""
     # First check environment variable
-    if "CLAUDE_BINARY_PATH" in os.environ:
-        claude_path = os.environ["CLAUDE_BINARY_PATH"]
-        if os.path.exists(claude_path):
-            return claude_path
+    env_path = os.environ.get("CLAUDE_BINARY_PATH")
+    if env_path:
+        path = Path(env_path)
+        if path.exists():
+            return str(path)
 
-    # Try to find claude in PATH - this should work for npm global installs
+    # Try to find claude in PATH
     claude_path = shutil.which("claude")
     if claude_path:
         return claude_path
-
-    # Import npm environment if needed
-    try:
-        import subprocess
-
-        # Try to get npm global bin path
-        result = subprocess.run(["npm", "bin", "-g"], capture_output=True, text=True)
-        if result.returncode == 0:
-            npm_bin_path = result.stdout.strip()
-            claude_npm_path = os.path.join(npm_bin_path, "claude")
-            if os.path.exists(claude_npm_path):
-                return claude_npm_path
-    except Exception:
-        pass
-
-    # Fallback to common npm/nvm locations
-    import glob
-
-    common_patterns = [
-        "/usr/local/bin/claude",
-        "/usr/local/share/nvm/versions/node/*/bin/claude",
-        "~/.nvm/versions/node/*/bin/claude",
-    ]
-
-    for pattern in common_patterns:
-        expanded_pattern = os.path.expanduser(pattern)
-        matches = glob.glob(expanded_pattern)
-        if matches:
-            # Return the most recent version
-            return sorted(matches)[-1]
 
     return "claude"  # Final fallback
 
 
 def default_project_root() -> str:
     """Default project root under the current working directory."""
-    return os.path.join(os.getcwd(), "claude_projects")
+    return str(Path.cwd() / "claude_projects")
 
 
 def default_session_map_path() -> str:
     """Default path for CLI-to-API session mapping."""
-    return os.path.join(os.getcwd(), "claude_sessions", "session_map.json")
+    return str(Path.cwd() / "claude_sessions" / "session_map.json")
 
 
 def default_log_file_path() -> str:
     """Default path for application logs."""
-    return os.path.join(os.getcwd(), "dist", "logs", "claude-code-api.log")
+    return str(Path.cwd() / "dist" / "logs" / "claude-code-api.log")
 
 
 def _is_shell_script_line(line: str) -> bool:

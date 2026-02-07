@@ -78,7 +78,9 @@ def resolve_path_within_base(path: str, base_path: str) -> str:
         path_value = os.fspath(path)
         normalized_path = os.path.normpath(path_value)
         if not os.path.isabs(normalized_path):
-            if normalized_path == ".." or normalized_path.startswith(f"..{os.path.sep}"):
+            if normalized_path == ".." or normalized_path.startswith(
+                f"..{os.path.sep}"
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=PATH_TRAVERSAL_MSG,
@@ -86,7 +88,9 @@ def resolve_path_within_base(path: str, base_path: str) -> str:
         if os.path.isabs(normalized_path):
             resolved_path = os.path.realpath(normalized_path)
         else:
-            resolved_path = os.path.realpath(os.path.join(abs_base_path, normalized_path))
+            resolved_path = os.path.realpath(
+                os.path.join(abs_base_path, normalized_path)
+            )
 
         try:
             common_path = os.path.commonpath([abs_base_path, resolved_path])

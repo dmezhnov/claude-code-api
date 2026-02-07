@@ -1,8 +1,6 @@
 """Tests for configuration helpers."""
 
-import glob
 import os
-import subprocess
 
 from claude_code_api.core import config as config_module
 
@@ -22,39 +20,9 @@ def test_find_claude_binary_shutil(monkeypatch):
     assert config_module.find_claude_binary() == "/usr/local/bin/claude"
 
 
-def test_find_claude_binary_npm(monkeypatch, tmp_path):
-    monkeypatch.delenv("CLAUDE_BINARY_PATH", raising=False)
-    monkeypatch.setattr(config_module.shutil, "which", lambda _name: None)
-
-    npm_bin = tmp_path / "bin"
-    npm_bin.mkdir()
-    (npm_bin / "claude").write_text("bin")
-
-    class Result:
-        returncode = 0
-        stdout = str(npm_bin)
-
-    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: Result())
-    assert config_module.find_claude_binary() == str(npm_bin / "claude")
-
-
-def test_find_claude_binary_glob(monkeypatch):
-    monkeypatch.delenv("CLAUDE_BINARY_PATH", raising=False)
-    monkeypatch.setattr(config_module.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(
-        subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(OSError("no"))
-    )
-    monkeypatch.setattr(glob, "glob", lambda _pattern: ["/a/claude", "/b/claude"])
-    assert config_module.find_claude_binary() == "/b/claude"
-
-
 def test_find_claude_binary_fallback(monkeypatch):
     monkeypatch.delenv("CLAUDE_BINARY_PATH", raising=False)
     monkeypatch.setattr(config_module.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(
-        subprocess, "run", lambda *_a, **_k: (_ for _ in ()).throw(OSError("no"))
-    )
-    monkeypatch.setattr(glob, "glob", lambda _pattern: [])
     assert config_module.find_claude_binary() == "claude"
 
 
