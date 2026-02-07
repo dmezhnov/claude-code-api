@@ -27,13 +27,36 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Read SonarCloud token from Key Vault
+      - name: Resolve SonarCloud token
         shell: bash
+        env:
+          FALLBACK_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          SONAR_TOKEN="$(az keyvault secret show \
+          KV_SONAR_TOKEN="$(az keyvault secret show \
             --vault-name "${{ vars.AZURE_KEYVAULT_NAME }}" \
             --name "sonar-cloud-token" \
-            --query value -o tsv)"
+            --query value -o tsv 2>/dev/null || true)"
+
+          TOKEN_SOURCE=""
+          if [ -n "${KV_SONAR_TOKEN}" ]; then
+            KV_VALID="$(curl -sS -u "${KV_SONAR_TOKEN}:" https://sonarcloud.io/api/authentication/validate | grep -Eo 'true|false' | head -n1 || true)"
+            if [ "${KV_VALID}" = "true" ]; then
+              SONAR_TOKEN="${KV_SONAR_TOKEN}"
+              TOKEN_SOURCE="keyvault"
+            fi
+          fi
+
+          if [ -z "${TOKEN_SOURCE}" ] && [ -n "${FALLBACK_SONAR_TOKEN:-}" ]; then
+            SONAR_TOKEN="${FALLBACK_SONAR_TOKEN}"
+            TOKEN_SOURCE="github-secret-fallback"
+          fi
+
+          if [ -z "${TOKEN_SOURCE}" ]; then
+            echo "No valid Sonar token found in Key Vault and no fallback secret available."
+            exit 1
+          fi
+
+          echo "::notice title=Sonar token source::${TOKEN_SOURCE}"
           echo "::add-mask::$SONAR_TOKEN"
           echo "SONAR_TOKEN=$SONAR_TOKEN" >> "$GITHUB_ENV"
 
