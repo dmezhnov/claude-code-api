@@ -126,8 +126,27 @@ async def create_chat_completion(
                 }
             )
         
-        user_prompt = user_messages[-1].get_text_content()
-        
+        last_user_msg = user_messages[-1]
+        user_prompt = last_user_msg.get_text_content()
+
+        # Handle vision: extract images and prepend Read instructions
+        image_paths = last_user_msg.extract_images()
+        if image_paths:
+            image_refs = "\n".join(
+                f"- Image {i+1}: {path}" for i, path in enumerate(image_paths)
+            )
+            user_prompt = (
+                f"Read the following image file(s) using the Read tool, "
+                f"then answer the question below.\n\n"
+                f"Image files:\n{image_refs}\n\n"
+                f"Question: {user_prompt}"
+            )
+            logger.info(
+                "Vision request: extracted images",
+                image_count=len(image_paths),
+                image_paths=image_paths
+            )
+
         # Extract system prompt
         system_messages = [msg for msg in request.messages if msg.role == "system"]
         system_prompt = system_messages[0].get_text_content() if system_messages else request.system_prompt
@@ -204,7 +223,7 @@ async def create_chat_completion(
             # Return streaming response
             return StreamingResponse(
                 create_sse_response(claude_session_id, claude_model, claude_process),
-                media_type="text/plain",
+                media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",

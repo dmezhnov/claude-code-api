@@ -1,7 +1,10 @@
 """OpenAI-compatible Pydantic models."""
 
+import base64
+import os
+import tempfile
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Union, Literal
+from typing import List, Optional, Dict, Any, Union, Literal, Tuple
 from pydantic import BaseModel, Field, validator
 
 
@@ -10,7 +13,7 @@ class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"] = Field(..., description="The role of the message author")
     content: Any = Field(..., description="The content of the message")  # Accept anything
     name: Optional[str] = Field(None, description="Optional name for the message author")
-    
+
     def get_text_content(self) -> str:
         """Extract text content from any format."""
         if isinstance(self.content, str):
@@ -20,6 +23,8 @@ class ChatMessage(BaseModel):
             text_parts = []
             for item in self.content:
                 if isinstance(item, dict):
+                    if item.get("type") == "image_url":
+                        continue  # Skip images for text extraction
                     if "text" in item:
                         text_parts.append(str(item["text"]))
                     elif "content" in item:
@@ -29,6 +34,50 @@ class ChatMessage(BaseModel):
             return "\n".join(text_parts)
         else:
             return str(self.content)
+
+    def extract_images(self) -> List[str]:
+        """Extract base64 images from content, save to temp files.
+
+        Returns list of saved file paths. Handles both OpenAI formats:
+        - {"type": "image_url", "image_url": "data:image/png;base64,..."}
+        - {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+        """
+        if not isinstance(self.content, list):
+            return []
+
+        saved_paths = []
+        for item in self.content:
+            if not isinstance(item, dict) or item.get("type") != "image_url":
+                continue
+
+            image_data = item.get("image_url", "")
+
+            # Handle both string and dict formats
+            if isinstance(image_data, dict):
+                image_data = image_data.get("url", "")
+
+            if not isinstance(image_data, str):
+                continue
+
+            # Extract base64 data from data URI
+            b64_data = image_data
+            if b64_data.startswith("data:"):
+                # Format: data:image/png;base64,<data>
+                parts = b64_data.split(",", 1)
+                if len(parts) == 2:
+                    b64_data = parts[1]
+
+            # Decode and save to temp file
+            try:
+                image_bytes = base64.b64decode(b64_data)
+                fd, path = tempfile.mkstemp(suffix=".png", prefix="vlm_")
+                os.write(fd, image_bytes)
+                os.close(fd)
+                saved_paths.append(path)
+            except Exception:
+                continue
+
+        return saved_paths
 
 
 class ChatCompletionRequest(BaseModel):
