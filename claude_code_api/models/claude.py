@@ -7,11 +7,23 @@ from enum import Enum
 
 
 class ClaudeModel(str, Enum):
-    """Available Claude models - matching Claude Code CLI supported models."""
+    """Available Claude models.
+
+    Sonnet/Haiku use aliased names (cc-*) to avoid ProxyAI plugin
+    matching them to built-in models and overriding the provider.
+    The aliases are resolved to real CLI model names in validate_claude_model().
+    """
     OPUS_46 = "claude-opus-4-6"
-    SONNET_45 = "claude-sonnet-4-5-20250929"
-    HAIKU_45 = "claude-haiku-4-5-20251001"
+    SONNET_45 = "cc-sonnet-45"
+    HAIKU_45 = "cc-haiku-45"
     SONNET_37 = "claude-3-7-sonnet-20250219"
+
+
+# Maps aliased model names to real Claude CLI model names
+MODEL_ALIASES: dict[str, str] = {
+    "cc-sonnet-45": "claude-sonnet-4-5-20250929",
+    "cc-haiku-45": "claude-haiku-4-5-20251001",
+}
 
 
 class ClaudeMessageType(str, Enum):
@@ -198,9 +210,13 @@ class ClaudeModelInfo(BaseModel):
 def validate_claude_model(model: str) -> str:
     """Validate and normalize Claude model name.
 
-    Any model string starting with 'claude-' is accepted and passed
-    through to the Claude Code CLI which handles its own validation.
+    Resolves aliased names (cc-*) to real Claude CLI model names.
+    Any model string starting with 'claude-' is passed through directly.
     """
+    # Resolve aliases first
+    if model in MODEL_ALIASES:
+        return MODEL_ALIASES[model]
+
     if model.startswith("claude-"):
         return model
 
@@ -209,7 +225,7 @@ def validate_claude_model(model: str) -> str:
     if model in valid_models:
         return model
 
-    return ClaudeModel.SONNET_45
+    return MODEL_ALIASES.get(ClaudeModel.SONNET_45, ClaudeModel.SONNET_45)
 
 
 def get_default_model() -> str:
