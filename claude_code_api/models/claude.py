@@ -9,8 +9,8 @@ from enum import Enum
 class ClaudeModel(str, Enum):
     """Available Claude models - matching Claude Code CLI supported models."""
     OPUS_46 = "claude-opus-4-6"
-    SONNET_45 = "claude-sonnet-4-5"
-    HAIKU_45 = "claude-haiku-4-5"
+    SONNET_45 = "claude-sonnet-4-5-20250929"
+    HAIKU_45 = "claude-haiku-4-5-20251001"
     SONNET_37 = "claude-3-7-sonnet-20250219"
 
 
