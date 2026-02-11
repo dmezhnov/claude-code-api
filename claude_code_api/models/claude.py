@@ -125,7 +125,7 @@ class ClaudeProjectConfig(BaseModel):
     project_id: str = Field(..., description="Project ID")
     name: str = Field(..., description="Project name")
     path: str = Field(..., description="Project path")
-    default_model: str = Field(ClaudeModel.HAIKU_35, description="Default model")
+    default_model: str = Field(ClaudeModel.SONNET_45, description="Default model")
     system_prompt: Optional[str] = Field(None, description="Default system prompt")
     tools_enabled: List[ClaudeToolType] = Field(default_factory=list, description="Enabled tools")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens per request")
