@@ -28,6 +28,82 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+async def _wrap_as_sse(response: dict):
+    """Wrap a non-streaming response dict as SSE events.
+
+    Converts a chat.completion object into streaming chunks so that
+    clients expecting SSE (text/event-stream) can consume it.
+    """
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    completion_id = response.get("id", f"chatcmpl-{_uuid.uuid4().hex[:29]}")
+    created = response.get("created", int(_dt.utcnow().timestamp()))
+    model = response.get("model", "unknown")
+
+    choice = response.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content")
+    tool_calls = message.get("tool_calls")
+    finish_reason = choice.get("finish_reason", "stop")
+
+    # Initial chunk with role
+    initial = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+    }
+    yield f"data: {json.dumps(initial)}\n\n"
+
+    # Content chunk
+    if content:
+        content_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(content_chunk)}\n\n"
+
+    # Tool call chunks (OpenAI streaming tool_calls format)
+    if tool_calls:
+        for i, tc in enumerate(tool_calls):
+            tc_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"tool_calls": [{
+                        "index": i,
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["function"]["name"],
+                            "arguments": tc["function"]["arguments"],
+                        },
+                    }]},
+                    "finish_reason": None,
+                }],
+            }
+            yield f"data: {json.dumps(tc_chunk)}\n\n"
+
+    # Final chunk
+    final = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+    }
+    yield f"data: {json.dumps(final)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 @router.post("/chat/completions")
 async def create_chat_completion(
     req: Request
@@ -85,10 +161,13 @@ async def create_chat_completion(
     # Extract client info for logging
     client_id = getattr(req.state, 'client_id', 'anonymous')
 
-    # Force non-streaming when tools are present so tool_call parsing works
+    # When tools are present, we collect the full response (non-streaming)
+    # for tool_call parsing, but may still wrap the result as SSE if the
+    # client requested streaming.
     has_tools = bool(request.tools)
+    wants_stream = request.stream
     if has_tools and request.stream:
-        logger.info("Forcing non-streaming mode for tool calling")
+        logger.info("Collecting full response for tool_call parsing (will wrap as SSE)")
         request.stream = False
 
     logger.info(
@@ -342,6 +421,19 @@ async def create_chat_completion(
 
             # Add extension fields
             response["project_id"] = project_id
+
+            # If the client originally requested streaming, wrap as SSE
+            if wants_stream:
+                return StreamingResponse(
+                    _wrap_as_sse(response),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Session-ID": claude_session_id,
+                        "X-Project-ID": project_id,
+                    },
+                )
 
             return response
     
