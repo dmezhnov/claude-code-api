@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import uuid
@@ -36,12 +37,27 @@ class ClaudeProcess:
         disable_builtin_tools: bool = False,
     ) -> bool:
         """Start Claude Code process and wait for completion."""
+        self._temp_files = []  # Track temp files for cleanup
+        self._temp_dirs = []   # Track temp dirs for cleanup
         try:
-            # Prepare real command - using exact format from working Claudia example
-            cmd = [settings.claude_binary_path]
-            cmd.extend(["-p", prompt])
+            # Max single argument size for execve() on Linux is 128KB.
+            # When the system prompt or user prompt exceeds this, write
+            # them to files and use a wrapper script that reads from files.
+            MAX_ARG = 120000  # Conservative limit (128KB minus overhead)
 
-            if system_prompt:
+            cmd = [settings.claude_binary_path]
+            use_file_fallback = False
+
+            # Handle user prompt
+            if len(prompt) > MAX_ARG:
+                use_file_fallback = True
+            else:
+                cmd.extend(["-p", prompt])
+
+            # Handle system prompt
+            if system_prompt and len(system_prompt) > MAX_ARG:
+                use_file_fallback = True
+            elif system_prompt:
                 cmd.extend(["--system-prompt", system_prompt])
 
             if append_system_prompt:
@@ -53,32 +69,86 @@ class ClaudeProcess:
             if model:
                 cmd.extend(["--model", model])
 
-            # Always use stream-json output format (exact order from working example)
             cmd.extend([
                 "--output-format", "stream-json",
                 "--verbose",
-                "--dangerously-skip-permissions"
+                "--dangerously-skip-permissions",
             ])
-            
+
             logger.info(
                 "Starting Claude process",
                 session_id=self.session_id,
                 project_path=self.project_path,
-                model=model or settings.default_model
+                model=model or settings.default_model,
+                prompt_size=len(prompt),
+                system_prompt_size=len(system_prompt) if system_prompt else 0,
+                use_file_fallback=use_file_fallback,
             )
-            
-            # Start process from src directory (where Claude works without API key)
+
+            # Start process from src directory
             src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-            logger.info(f"Starting Claude from directory: {src_dir}")
-            logger.info(f"Command: {' '.join(cmd)}")
-            
-            # Claude CLI runs to completion, so we run it and capture all output
-            self.process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=src_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+
+            if use_file_fallback:
+                # execve() limits each argument to 128KB (MAX_ARG_STRLEN).
+                # Write the system prompt to a CLAUDE.md file in a temp
+                # directory. Claude CLI reads CLAUDE.md automatically.
+                work_dir = tempfile.mkdtemp(prefix='claude-work-')
+                self._temp_dirs.append(work_dir)
+
+                # Rebuild command without oversized arguments
+                cmd_final = [settings.claude_binary_path]
+
+                if len(prompt) > MAX_ARG:
+                    truncated = prompt[:MAX_ARG - 100]
+                    truncated += "\n\n[Note: message was truncated due to size]"
+                    cmd_final.extend(["-p", truncated])
+                else:
+                    cmd_final.extend(["-p", prompt])
+
+                if system_prompt and len(system_prompt) > MAX_ARG:
+                    claude_md = os.path.join(work_dir, 'CLAUDE.md')
+                    with open(claude_md, 'w') as f:
+                        f.write(system_prompt)
+                    logger.info(
+                        "System prompt written to CLAUDE.md",
+                        path=claude_md,
+                        size=len(system_prompt),
+                    )
+                elif system_prompt:
+                    cmd_final.extend(["--system-prompt", system_prompt])
+
+                if append_system_prompt:
+                    cmd_final.extend(["--append-system-prompt", append_system_prompt])
+
+                if disable_builtin_tools:
+                    cmd_final.extend(["--tools", ""])
+
+                if model:
+                    cmd_final.extend(["--model", model])
+
+                cmd_final.extend([
+                    "--output-format", "stream-json",
+                    "--verbose",
+                    "--dangerously-skip-permissions",
+                ])
+
+                logger.info(f"Starting Claude with CLAUDE.md in: {work_dir}")
+
+                self.process = await asyncio.create_subprocess_exec(
+                    *cmd_final,
+                    cwd=work_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                logger.info(f"Starting Claude directly: {' '.join(cmd)[:200]}...")
+
+                self.process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=src_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
             
             # Wait for process to complete and capture all output
             stdout, stderr = await self.process.communicate()
@@ -132,8 +202,20 @@ class ClaudeProcess:
                 error=str(e)
             )
             return False
-    
-    
+        finally:
+            # Clean up temp files and dirs
+            for path in getattr(self, '_temp_files', []):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            for path in getattr(self, '_temp_dirs', []):
+                try:
+                    import shutil
+                    shutil.rmtree(path, ignore_errors=True)
+                except OSError:
+                    pass
+
     async def get_output(self) -> AsyncGenerator[Dict[str, Any], None]:
         """Get output from Claude process."""
         while True:
