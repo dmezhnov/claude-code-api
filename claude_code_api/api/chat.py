@@ -408,7 +408,13 @@ async def create_chat_completion(
                 if content:
                     tool_calls, cleaned_text = parse_tool_calls(content)
                     if tool_calls:
-                        choice["message"]["content"] = cleaned_text or None
+                        # Drop text content when tool_calls are present.
+                        # OpenClaw will show content as a message AND execute
+                        # tools, then send results back for another completion.
+                        # This creates duplicate messages.  Let the final
+                        # completion (after tool execution) provide the
+                        # user-facing text instead.
+                        choice["message"]["content"] = None
                         choice["message"]["tool_calls"] = [
                             tc.model_dump() for tc in tool_calls
                         ]
