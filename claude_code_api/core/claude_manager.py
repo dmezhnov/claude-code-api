@@ -27,28 +27,36 @@ class ClaudeProcess:
         self.error_queue = asyncio.Queue()
         
     async def start(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         model: str = None,
         system_prompt: str = None,
-        resume_session: str = None
+        resume_session: str = None,
+        append_system_prompt: str = None,
+        disable_builtin_tools: bool = False,
     ) -> bool:
         """Start Claude Code process and wait for completion."""
         try:
             # Prepare real command - using exact format from working Claudia example
             cmd = [settings.claude_binary_path]
             cmd.extend(["-p", prompt])
-            
+
             if system_prompt:
                 cmd.extend(["--system-prompt", system_prompt])
-            
+
+            if append_system_prompt:
+                cmd.extend(["--append-system-prompt", append_system_prompt])
+
+            if disable_builtin_tools:
+                cmd.extend(["--tools", ""])
+
             if model:
                 cmd.extend(["--model", model])
-            
+
             # Always use stream-json output format (exact order from working example)
             cmd.extend([
                 "--output-format", "stream-json",
-                "--verbose", 
+                "--verbose",
                 "--dangerously-skip-permissions"
             ])
             
@@ -258,7 +266,9 @@ class ClaudeManager:
         prompt: str,
         model: str = None,
         system_prompt: str = None,
-        resume_session: str = None
+        resume_session: str = None,
+        append_system_prompt: str = None,
+        disable_builtin_tools: bool = False,
     ) -> ClaudeProcess:
         """Create new Claude session."""
         # Check concurrent session limit
@@ -276,7 +286,9 @@ class ClaudeManager:
             prompt=prompt,
             model=model or settings.default_model,
             system_prompt=system_prompt,
-            resume_session=resume_session
+            resume_session=resume_session,
+            append_system_prompt=append_system_prompt,
+            disable_builtin_tools=disable_builtin_tools,
         )
         
         if not success:

@@ -8,11 +8,39 @@ from typing import List, Optional, Dict, Any, Union, Literal, Tuple
 from pydantic import BaseModel, Field, validator
 
 
+class FunctionCall(BaseModel):
+    """Function call within a tool call."""
+    name: str = Field(..., description="The name of the function to call")
+    arguments: str = Field(..., description="JSON-encoded arguments for the function")
+
+
+class ToolCall(BaseModel):
+    """Tool call in assistant message."""
+    id: str = Field(..., description="Unique identifier for this tool call")
+    type: Literal["function"] = Field("function", description="The type of tool call")
+    function: FunctionCall = Field(..., description="The function to call")
+
+
+class ToolFunction(BaseModel):
+    """Function definition within a tool."""
+    name: str = Field(..., description="The name of the function")
+    description: Optional[str] = Field(None, description="Description of what the function does")
+    parameters: Optional[Dict[str, Any]] = Field(None, description="JSON Schema for the function parameters")
+
+
+class Tool(BaseModel):
+    """Tool definition in OpenAI format."""
+    type: Literal["function"] = Field("function", description="The type of tool")
+    function: ToolFunction = Field(..., description="The function definition")
+
+
 class ChatMessage(BaseModel):
     """Chat message model - accepts any content format."""
-    role: Literal["system", "user", "assistant"] = Field(..., description="The role of the message author")
-    content: Any = Field(..., description="The content of the message")  # Accept anything
+    role: Literal["system", "user", "assistant", "tool"] = Field(..., description="The role of the message author")
+    content: Any = Field(None, description="The content of the message")
     name: Optional[str] = Field(None, description="Optional name for the message author")
+    tool_calls: Optional[List[ToolCall]] = Field(None, description="Tool calls made by the assistant")
+    tool_call_id: Optional[str] = Field(None, description="ID of the tool call this message responds to")
 
     def get_text_content(self) -> str:
         """Extract text content from any format."""
@@ -93,6 +121,10 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = Field(0.0, ge=-2.0, le=2.0, description="Presence penalty")
     user: Optional[str] = Field(None, description="Unique identifier representing your end-user")
     
+    # Tool use
+    tools: Optional[List[Tool]] = Field(None, description="List of tools the model may call")
+    tool_choice: Optional[Any] = Field(None, description="Controls which tool is called")
+
     # Extension fields for Claude Code
     project_id: Optional[str] = Field(None, description="Project ID for Claude Code context")
     session_id: Optional[str] = Field(None, description="Session ID to continue conversation")

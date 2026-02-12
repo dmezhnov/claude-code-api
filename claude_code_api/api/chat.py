@@ -22,6 +22,7 @@ from claude_code_api.core.claude_manager import create_project_directory
 from claude_code_api.core.session_manager import SessionManager, ConversationManager
 from claude_code_api.utils.streaming import create_sse_response, create_non_streaming_response
 from claude_code_api.utils.parser import ClaudeOutputParser, estimate_tokens
+from claude_code_api.utils.tools import format_tools_prompt, parse_tool_calls
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -133,8 +134,20 @@ async def create_chat_completion(
         if len(conversation_messages) > 1:
             parts = []
             for msg in conversation_messages:
-                role_label = "User" if msg.role == "user" else "Assistant"
-                parts.append(f"[{role_label}]: {msg.get_text_content()}")
+                if msg.role == "user":
+                    parts.append(f"[User]: {msg.get_text_content()}")
+                elif msg.role == "assistant":
+                    text = msg.get_text_content() or ""
+                    # Include tool calls made by the assistant
+                    if msg.tool_calls:
+                        import json as _json
+                        for tc in msg.tool_calls:
+                            text += f"\n[Called tool: {tc.function.name}({tc.function.arguments})]"
+                    parts.append(f"[Assistant]: {text}")
+                elif msg.role == "tool":
+                    # Tool result from gateway
+                    tool_name = msg.name or "unknown"
+                    parts.append(f"[Tool Result ({tool_name})]: {msg.get_text_content()}")
             user_prompt = (
                 "Below is the conversation history. Continue naturally from where it left off. "
                 "Reply ONLY as the Assistant to the last User message.\n\n"
@@ -164,7 +177,14 @@ async def create_chat_completion(
         # Extract system prompt
         system_messages = [msg for msg in request.messages if msg.role == "system"]
         system_prompt = system_messages[0].get_text_content() if system_messages else request.system_prompt
-        
+
+        # Build tool prompt if tools are provided
+        append_system_prompt = None
+        has_tools = bool(request.tools)
+        if has_tools:
+            append_system_prompt = format_tools_prompt(request.tools)
+            logger.info("Tools provided", tool_count=len(request.tools))
+
         # Handle project context
         project_id = request.project_id or f"default-{client_id}"
         project_path = create_project_directory(project_id)
@@ -202,7 +222,9 @@ async def create_chat_completion(
                 prompt=user_prompt,
                 model=claude_model,
                 system_prompt=system_prompt,
-                resume_session=request.session_id
+                resume_session=request.session_id,
+                append_system_prompt=append_system_prompt,
+                disable_builtin_tools=has_tools,
             )
         except Exception as e:
             logger.error(
@@ -294,23 +316,28 @@ async def create_chat_completion(
                 model=claude_model,
                 usage_summary=usage_summary
             )
-            
+
+            # Parse tool calls from response text if tools were provided
+            if has_tools and response.get("choices"):
+                choice = response["choices"][0]
+                content = choice.get("message", {}).get("content", "")
+                if content:
+                    tool_calls, cleaned_text = parse_tool_calls(content)
+                    if tool_calls:
+                        choice["message"]["content"] = cleaned_text or None
+                        choice["message"]["tool_calls"] = [
+                            tc.model_dump() for tc in tool_calls
+                        ]
+                        choice["finish_reason"] = "tool_calls"
+                        logger.info(
+                            "Tool calls parsed from response",
+                            tool_count=len(tool_calls),
+                            tools=[tc.function.name for tc in tool_calls],
+                        )
+
             # Add extension fields
             response["project_id"] = project_id
-            
-            # Log the complete response before returning
-            logger.info(
-                "Returning chat completion response",
-                response_id=response.get("id"),
-                choices_count=len(response.get("choices", [])),
-                has_choices_0=bool(response.get("choices") and len(response["choices"]) > 0),
-                choices_0_keys=list(response["choices"][0].keys()) if response.get("choices") and len(response["choices"]) > 0 else [],
-                message_keys=list(response["choices"][0]["message"].keys()) if response.get("choices") and len(response["choices"]) > 0 and "message" in response["choices"][0] else [],
-                content_length=len(response["choices"][0]["message"].get("content", "")) if response.get("choices") and len(response["choices"]) > 0 and "message" in response["choices"][0] else 0,
-                full_response_keys=list(response.keys()),
-                response_size=len(str(response))
-            )
-            
+
             return response
     
     except HTTPException:
