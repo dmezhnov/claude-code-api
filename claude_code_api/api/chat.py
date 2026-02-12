@@ -112,7 +112,8 @@ async def create_chat_completion(
                 }
             )
         
-        # Extract the user prompt (last user message)
+        # Build conversation prompt from all messages
+        conversation_messages = [msg for msg in request.messages if msg.role != "system"]
         user_messages = [msg for msg in request.messages if msg.role == "user"]
         if not user_messages:
             raise HTTPException(
@@ -120,14 +121,27 @@ async def create_chat_completion(
                 detail={
                     "error": {
                         "message": "At least one user message is required",
-                        "type": "invalid_request_error", 
+                        "type": "invalid_request_error",
                         "code": "missing_user_message"
                     }
                 }
             )
-        
+
         last_user_msg = user_messages[-1]
-        user_prompt = last_user_msg.get_text_content()
+
+        # If there are previous messages, format as conversation history
+        if len(conversation_messages) > 1:
+            parts = []
+            for msg in conversation_messages:
+                role_label = "User" if msg.role == "user" else "Assistant"
+                parts.append(f"[{role_label}]: {msg.get_text_content()}")
+            user_prompt = (
+                "Below is the conversation history. Continue naturally from where it left off. "
+                "Reply ONLY as the Assistant to the last User message.\n\n"
+                + "\n\n".join(parts)
+            )
+        else:
+            user_prompt = last_user_msg.get_text_content()
 
         # Handle vision: extract images and prepend Read instructions
         image_paths = last_user_msg.extract_images()
