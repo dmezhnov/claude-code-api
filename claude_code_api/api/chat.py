@@ -198,8 +198,22 @@ async def create_chat_completion(
                 }
             )
         
-        # Build conversation prompt from all messages
-        conversation_messages = [msg for msg in request.messages if msg.role != "system"]
+        # Build conversation prompt from all messages.
+        # Keep the first system message as the system prompt (extracted later)
+        # but include subsequent system messages (e.g. cron events) in history.
+        system_messages_all = [msg for msg in request.messages if msg.role == "system"]
+        conversation_messages = []
+        first_system_seen = False
+        for msg in request.messages:
+            if msg.role == "system":
+                if first_system_seen:
+                    # Subsequent system messages (cron events etc.) go into history
+                    conversation_messages.append(msg)
+                else:
+                    first_system_seen = True
+                    # Skip the first system message (main system prompt)
+            else:
+                conversation_messages.append(msg)
         user_messages = [msg for msg in request.messages if msg.role == "user"]
         if not user_messages:
             raise HTTPException(
@@ -229,6 +243,9 @@ async def create_chat_completion(
                         for tc in msg.tool_calls:
                             text += f"\n[Called tool: {tc.function.name}({tc.function.arguments})]"
                     parts.append(f"[Assistant]: {text}")
+                elif msg.role == "system":
+                    # Subsequent system messages (cron events, notifications)
+                    parts.append(f"[System Event]: {msg.get_text_content()}")
                 elif msg.role == "tool":
                     # Tool result from gateway
                     tool_name = msg.name or "unknown"
