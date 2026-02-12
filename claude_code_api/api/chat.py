@@ -81,10 +81,16 @@ async def create_chat_completion(
     # Get managers from app state
     session_manager: SessionManager = req.app.state.session_manager
     claude_manager = req.app.state.claude_manager
-    
+
     # Extract client info for logging
     client_id = getattr(req.state, 'client_id', 'anonymous')
-    
+
+    # Force non-streaming when tools are present so tool_call parsing works
+    has_tools = bool(request.tools)
+    if has_tools and request.stream:
+        logger.info("Forcing non-streaming mode for tool calling")
+        request.stream = False
+
     logger.info(
         "Chat completion request validated",
         client_id=client_id,
@@ -180,7 +186,6 @@ async def create_chat_completion(
 
         # Build tool prompt if tools are provided
         append_system_prompt = None
-        has_tools = bool(request.tools)
         if has_tools:
             append_system_prompt = format_tools_prompt(request.tools)
             logger.info("Tools provided", tool_count=len(request.tools))
