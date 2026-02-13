@@ -2,6 +2,15 @@
 
 > Fork of [codingworkflow/claude-code-api](https://github.com/codingworkflow/claude-code-api) with custom patches.
 
+## Fork patches
+
+- **OpenAI-compatible tool calling** — parse `tools` from requests, format them into the system prompt, extract `tool_calls` from Claude responses
+- **Conversation history** — pass full message history (including system/cron events) as context, not just the last user message
+- **Large system prompt handling** — write system prompts >10KB to a temp `CLAUDE.md` file instead of passing via CLI argument (avoids Linux `execve` 128KB arg limit)
+- **Model aliases** — `cc-*` prefixed model IDs to avoid name collisions with proxy providers
+- **Streaming fixes** — correct SSE `Content-Type`, wrap non-streaming tool responses as SSE when the client requests `stream: true`
+- **Updated models** — Claude Opus 4.6, Sonnet 4.5, Haiku 4.5
+
 ## Getting Started
 
 Use the Makefile to install the project or pip/uv.
