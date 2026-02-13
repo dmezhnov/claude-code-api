@@ -1,8 +1,9 @@
-"""Tool format conversion between OpenAI and Anthropic formats."""
+"""Utilities for OpenAI-compatible tool calling via Claude CLI."""
 
 import json
+import re
 import uuid
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional, Tuple
 
 from claude_code_api.models.openai import Tool, ToolCall, FunctionCall
 
@@ -12,63 +13,95 @@ def generate_tool_call_id() -> str:
     return f"call_{uuid.uuid4().hex[:24]}"
 
 
-def openai_tools_to_anthropic(tools: List[Tool]) -> List[dict]:
-    """Convert OpenAI tool definitions to Anthropic format.
+def format_tools_prompt(tools: List[Tool]) -> str:
+    """Convert OpenAI tool definitions into a system prompt appendix.
 
-    OpenAI:  {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
-    Anthropic: {"name": ..., "description": ..., "input_schema": {...}}
+    Instructs Claude to output tool calls in a fenced code block
+    format that can be reliably parsed from the response text.
     """
-    result = []
+    if not tools:
+        return ""
+
+    tool_descriptions = []
     for tool in tools:
         fn = tool.function
-        result.append({
-            "name": fn.name,
-            "description": fn.description or "",
-            "input_schema": fn.parameters or {"type": "object", "properties": {}},
-        })
-    return result
+        desc = f"- **{fn.name}**"
+        if fn.description:
+            desc += f": {fn.description}"
+        if fn.parameters:
+            # Include only a compact schema summary
+            params = fn.parameters.get("properties", {})
+            required = fn.parameters.get("required", [])
+            if params:
+                param_parts = []
+                for pname, pinfo in params.items():
+                    ptype = pinfo.get("type", "any")
+                    req = " (required)" if pname in required else ""
+                    pdesc = pinfo.get("description", "")
+                    param_parts.append(f"  - `{pname}` ({ptype}{req}): {pdesc}")
+                desc += "\n" + "\n".join(param_parts)
+        tool_descriptions.append(desc)
+
+    return (
+        "# Available Tools\n\n"
+        "You have access to the following tools. To call a tool, output EXACTLY "
+        "this format (use a fenced code block with the language tag `tool_call`):\n\n"
+        "```tool_call\n"
+        '{"name": "tool_name", "arguments": {"param": "value"}}\n'
+        "```\n\n"
+        "Rules:\n"
+        "- You may include text before and/or after tool calls.\n"
+        "- You may call multiple tools in one response (use separate blocks).\n"
+        "- The arguments value must be a JSON object matching the tool's parameters.\n"
+        "- ALWAYS use this exact format when you want to perform an action.\n\n"
+        "Tools:\n\n" + "\n\n".join(tool_descriptions)
+    )
 
 
-def anthropic_tool_use_to_openai(
-    content_blocks: List[Any],
-) -> Tuple[Optional[List[ToolCall]], Optional[str]]:
-    """Convert Anthropic content blocks to OpenAI ToolCall objects + text.
+TOOL_CALL_PATTERN = re.compile(
+    r"```tool_call\s*\n(.*?)\n```",
+    re.DOTALL,
+)
 
-    Anthropic response content:
-        [{"type": "text", "text": "..."}, {"type": "tool_use", "id": "...", "name": "...", "input": {...}}]
 
-    Returns (tool_calls or None, text_content or None).
+def parse_tool_calls(text: str) -> Tuple[Optional[List[ToolCall]], str]:
+    """Parse tool_call fenced blocks from Claude's response text.
+
+    Returns:
+        Tuple of (list of ToolCall objects or None, cleaned text with blocks removed).
     """
-    tool_calls: List[ToolCall] = []
-    text_parts: List[str] = []
+    matches = list(TOOL_CALL_PATTERN.finditer(text))
+    if not matches:
+        return None, text
 
-    for block in content_blocks:
-        # Handle SDK objects (have .type attribute)
-        if hasattr(block, "type"):
-            if block.type == "text":
-                text_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    type="function",
-                    function=FunctionCall(
-                        name=block.name,
-                        arguments=json.dumps(block.input) if isinstance(block.input, dict) else str(block.input),
-                    ),
-                ))
-        # Handle dict format (from serialized data)
-        elif isinstance(block, dict):
-            if block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-            elif block.get("type") == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.get("id", generate_tool_call_id()),
-                    type="function",
-                    function=FunctionCall(
-                        name=block["name"],
-                        arguments=json.dumps(block.get("input", {})),
-                    ),
-                ))
+    tool_calls = []
+    for match in matches:
+        raw = match.group(1).strip()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
 
-    text = "\n".join(text_parts).strip() if text_parts else None
-    return (tool_calls if tool_calls else None, text)
+        name = data.get("name")
+        arguments = data.get("arguments", {})
+        if not name:
+            continue
+
+        tool_calls.append(
+            ToolCall(
+                id=generate_tool_call_id(),
+                type="function",
+                function=FunctionCall(
+                    name=name,
+                    arguments=json.dumps(arguments) if isinstance(arguments, dict) else str(arguments),
+                ),
+            )
+        )
+
+    if not tool_calls:
+        return None, text
+
+    # Remove tool_call blocks from text
+    cleaned = TOOL_CALL_PATTERN.sub("", text).strip()
+
+    return tool_calls, cleaned

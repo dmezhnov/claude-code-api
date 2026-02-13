@@ -8,6 +8,7 @@ import structlog
 
 from claude_code_api.core.config import settings
 from claude_code_api.core.database import db_manager, Session, Message
+from claude_code_api.core.claude_manager import ClaudeProcess
 
 logger = structlog.get_logger()
 
