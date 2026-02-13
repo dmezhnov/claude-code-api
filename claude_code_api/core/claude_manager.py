@@ -40,10 +40,11 @@ class ClaudeProcess:
         self._temp_files = []  # Track temp files for cleanup
         self._temp_dirs = []   # Track temp dirs for cleanup
         try:
-            # Max single argument size for execve() on Linux is 128KB.
-            # When the system prompt or user prompt exceeds this, write
-            # them to files and use a wrapper script that reads from files.
-            MAX_ARG = 120000  # Conservative limit (128KB minus overhead)
+            # Max single argument size for execve() on Linux is 128KB,
+            # but total argv+envp must fit in ~2MB. Use a conservative
+            # threshold: always use file fallback for prompts over 10KB
+            # to avoid any execve() issues.
+            MAX_ARG = 10000  # Very conservative: 10KB
 
             cmd = [settings.claude_binary_path]
             use_file_fallback = False
