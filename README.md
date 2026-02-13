@@ -1,7 +1,6 @@
-# Claude Code API Gateway
+# Claude Code API Gateway (Fork)
 
-A simple, focused OpenAI-compatible API gateway for Claude Code with streaming support.
-Leverage the Claude Code SDK use mode. Don't hack the token credentials.
+> Fork of [codingworkflow/claude-code-api](https://github.com/codingworkflow/claude-code-api) with custom patches.
 
 ## Getting Started
 
