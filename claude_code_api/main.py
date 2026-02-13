@@ -10,6 +10,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -62,16 +63,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.claude_manager = ClaudeManager()
     logger.info("Managers initialized")
     
-    # Verify Claude Code availability
-    try:
-        claude_version = await app.state.claude_manager.get_version()
-        logger.info("Claude Code available", version=claude_version)
-    except Exception as e:
-        logger.error("Claude Code not available", error=str(e))
-        raise HTTPException(
-            status_code=503,
-            detail="Claude Code CLI not available. Please ensure Claude Code is installed and accessible."
-        )
+    # Verify Anthropic SDK
+    sdk_version = await app.state.claude_manager.get_version()
+    logger.info("Anthropic SDK ready", version=sdk_version)
+    if not settings.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        logger.warning("No ANTHROPIC_API_KEY configured - API calls will fail")
     
     yield
     
@@ -129,25 +125,13 @@ async def global_exception_handler(request, exc):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    try:
-        # Check Claude Code availability
-        claude_version = await app.state.claude_manager.get_version()
-        
-        return {
-            "status": "healthy",
-            "version": "1.0.0",
-            "claude_version": claude_version,
-            "active_sessions": len(app.state.session_manager.active_sessions)
-        }
-    except Exception as e:
-        logger.error("Health check failed", error=str(e))
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "error": str(e)
-            }
-        )
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "backend": "anthropic-sdk",
+        "sdk_version": anthropic.__version__,
+        "active_sessions": len(app.state.session_manager.active_sessions),
+    }
 
 
 @app.get("/")
