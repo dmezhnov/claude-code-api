@@ -3,11 +3,8 @@
 import asyncio
 import json
 import os
-import shlex
 import subprocess
 import tempfile
-import uuid
-from pathlib import Path
 from typing import Optional, Dict, List, AsyncGenerator, Any
 import structlog
 
@@ -36,28 +33,34 @@ class ClaudeProcess:
         append_system_prompt: str = None,
         disable_builtin_tools: bool = False,
     ) -> bool:
-        """Start Claude Code process and wait for completion."""
-        self._temp_files = []  # Track temp files for cleanup
-        self._temp_dirs = []   # Track temp dirs for cleanup
+        """Start Claude Code process and wait for completion.
+
+        The user prompt is always piped through stdin to avoid Linux
+        execve() argument size limits (~128KB per arg, ~2MB total).
+        This allows the full 200K token context window.
+        """
+        self._temp_files = []
+        self._temp_dirs = []
         try:
-            # Max single argument size for execve() on Linux is 128KB,
-            # but total argv+envp must fit in ~2MB. Use a conservative
-            # threshold: always use file fallback for prompts over 10KB
-            # to avoid any execve() issues.
-            MAX_ARG = 10000  # Very conservative: 10KB
+            # Threshold for CLI arguments that aren't the prompt itself
+            MAX_ARG = 10000
 
-            cmd = [settings.claude_binary_path]
-            use_file_fallback = False
+            cmd = [settings.claude_binary_path, "-p"]
 
-            # Handle user prompt
-            if len(prompt) > MAX_ARG:
-                use_file_fallback = True
-            else:
-                cmd.extend(["-p", prompt])
+            work_dir = None
 
-            # Handle system prompt
+            # Handle system prompt: write to CLAUDE.md if large
             if system_prompt and len(system_prompt) > MAX_ARG:
-                use_file_fallback = True
+                work_dir = tempfile.mkdtemp(prefix='claude-work-')
+                self._temp_dirs.append(work_dir)
+                claude_md = os.path.join(work_dir, 'CLAUDE.md')
+                with open(claude_md, 'w') as f:
+                    f.write(system_prompt)
+                logger.info(
+                    "System prompt written to CLAUDE.md",
+                    path=claude_md,
+                    size=len(system_prompt),
+                )
             elif system_prompt:
                 cmd.extend(["--system-prompt", system_prompt])
 
@@ -83,76 +86,25 @@ class ClaudeProcess:
                 model=model or settings.default_model,
                 prompt_size=len(prompt),
                 system_prompt_size=len(system_prompt) if system_prompt else 0,
-                use_file_fallback=use_file_fallback,
             )
 
-            # Start process from src directory
-            src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-
-            if use_file_fallback:
-                # execve() limits each argument to 128KB (MAX_ARG_STRLEN).
-                # Write the system prompt to a CLAUDE.md file in a temp
-                # directory. Claude CLI reads CLAUDE.md automatically.
-                work_dir = tempfile.mkdtemp(prefix='claude-work-')
-                self._temp_dirs.append(work_dir)
-
-                # Rebuild command without oversized arguments
-                cmd_final = [settings.claude_binary_path]
-
-                if len(prompt) > MAX_ARG:
-                    truncated = prompt[:MAX_ARG - 100]
-                    truncated += "\n\n[Note: message was truncated due to size]"
-                    cmd_final.extend(["-p", truncated])
-                else:
-                    cmd_final.extend(["-p", prompt])
-
-                if system_prompt and len(system_prompt) > MAX_ARG:
-                    claude_md = os.path.join(work_dir, 'CLAUDE.md')
-                    with open(claude_md, 'w') as f:
-                        f.write(system_prompt)
-                    logger.info(
-                        "System prompt written to CLAUDE.md",
-                        path=claude_md,
-                        size=len(system_prompt),
-                    )
-                elif system_prompt:
-                    cmd_final.extend(["--system-prompt", system_prompt])
-
-                if append_system_prompt:
-                    cmd_final.extend(["--append-system-prompt", append_system_prompt])
-
-                if disable_builtin_tools:
-                    cmd_final.extend(["--tools", ""])
-
-                if model:
-                    cmd_final.extend(["--model", model])
-
-                cmd_final.extend([
-                    "--output-format", "stream-json",
-                    "--verbose",
-                    "--dangerously-skip-permissions",
-                ])
-
-                logger.info(f"Starting Claude with CLAUDE.md in: {work_dir}")
-
-                self.process = await asyncio.create_subprocess_exec(
-                    *cmd_final,
-                    cwd=work_dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            if not work_dir:
+                work_dir = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), '..')
                 )
-            else:
-                logger.info(f"Starting Claude directly: {' '.join(cmd)[:200]}...")
 
-                self.process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    cwd=src_dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-            
-            # Wait for process to complete and capture all output
-            stdout, stderr = await self.process.communicate()
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=work_dir,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Pipe prompt through stdin to avoid execve() limits
+            stdout, stderr = await self.process.communicate(
+                input=prompt.encode('utf-8')
+            )
             
             logger.info(
                 "Claude process completed",
